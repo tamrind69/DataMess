@@ -27,6 +27,8 @@ from app.core.security import get_current_user
 
 from datetime import datetime
 
+from fastapi.middleware.cors import CORSMiddleware
+
 
 app = FastAPI(
     title="DataMess API",
@@ -34,6 +36,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 def health_check():

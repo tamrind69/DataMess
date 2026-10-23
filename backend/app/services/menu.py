@@ -53,6 +53,7 @@ def get_menu_by_weekday(
 
     statement = (
         select(
+            Dish.id,
             Dish.name,
             func.avg(Rating.score).label("average_rating"),
             func.count(Rating.id).label("rating_count"),
@@ -68,6 +69,7 @@ def get_menu_by_weekday(
 
     dishes = [
         {
+            "id": dish_id,
             "name": name,
             "average_rating": (
                 float(average_rating)
@@ -76,7 +78,7 @@ def get_menu_by_weekday(
             ),
             "rating_count": rating_count,
         }
-        for name, average_rating, rating_count in results
+        for dish_id, name, average_rating, rating_count in results
     ]
 
     return {
