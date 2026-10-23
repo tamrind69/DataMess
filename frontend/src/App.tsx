@@ -30,14 +30,69 @@ type LoginResponse = {
   token_type: string
 }
 
+type Mess = {
+  id: number
+  name: string
+  is_active: boolean
+}
+
+type RushSummary = {
+  mess_id: number
+  meal_type: Meal
+  slot_start: string
+  current_rush: 'low' | 'moderate' | 'high' | 'mixed' | 'no_data_yet'
+  current_reports: number
+  predicted_rush:
+  | 'low'
+  | 'moderate'
+  | 'high'
+  | 'mixed'
+  | 'not_enough_historical_data'
+  historical_reports: number
+}
+
+type RushLevel = 'low' | 'moderate' | 'high'
+
 const meals: Meal[] = ['breakfast', 'lunch', 'dinner']
 const API_URL = 'http://127.0.0.1:8000'
+
+const mealWindows: Record<Meal, { start: number; end: number }> = {
+  breakfast: { start: 7 * 60 + 30, end: 10 * 60 },
+  lunch: { start: 12 * 60 + 30, end: 14 * 60 + 30 },
+  dinner: { start: 20 * 60, end: 22 * 60 },
+}
+
+function isMealActive(meal: Meal, now = new Date()) {
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes()
+  const window = mealWindows[meal]
+  return minuteOfDay >= window.start && minuteOfDay < window.end
+}
+
+function rushLabel(level: string) {
+  const labels: Record<string, string> = {
+    low: 'Low',
+    moderate: 'Moderate',
+    high: 'High',
+    mixed: 'Mixed',
+    no_data_yet: 'No data yet',
+    not_enough_historical_data: 'Not enough historical data',
+  }
+  return labels[level] ?? level
+}
 
 function App() {
   const [menu, setMenu] = useState<MenuResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedMeal, setSelectedMeal] = useState<Meal>('breakfast')
+  const [messId, setMessId] = useState<number | null>(null)
+  const [rushSummary, setRushSummary] = useState<RushSummary | null>(null)
+  const [rushLoading, setRushLoading] = useState(false)
+  const [rushError, setRushError] = useState<string | null>(null)
+  const [rushMessage, setRushMessage] = useState('')
+  const [rushSubmitting, setRushSubmitting] = useState(false)
+  const [selectedRushLevel, setSelectedRushLevel] = useState<RushLevel | null>(null)
+  const [rushRefresh, setRushRefresh] = useState(0)
 
   const [selectedRatings, setSelectedRatings] = useState<
     Record<number, number>
@@ -80,6 +135,108 @@ function App() {
 
     validateSession()
   }, [accessToken])
+
+  useEffect(() => {
+    async function fetchMesses() {
+      try {
+        const response = await fetch(`${API_URL}/messes`)
+        if (!response.ok) throw new Error('Could not load messes.')
+        const messes: Mess[] = await response.json()
+        const activeMess = messes.find((mess) => mess.is_active)
+        setMessId(activeMess?.id ?? null)
+      } catch (err) {
+        console.error('Failed to load messes for rush reports:', err)
+      }
+    }
+
+    fetchMesses()
+  }, [])
+
+  useEffect(() => {
+    // Refresh periodically so the displayed slot follows the server's 15-minute windows.
+    const intervalId = window.setInterval(() => setRushRefresh((value) => value + 1), 30000)
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
+    async function fetchRushSummary() {
+      if (messId === null || !isMealActive(selectedMeal)) {
+        setRushSummary(null)
+        setRushError(null)
+        setRushLoading(false)
+        return
+      }
+
+      try {
+        setRushLoading(true)
+        setRushError(null)
+        const response = await fetch(
+          `${API_URL}/rush/summary/${messId}/${selectedMeal}`,
+        )
+        const data = await response.json().catch(() => null)
+        if (!response.ok) {
+          throw new Error(data?.detail ?? 'Could not load rush summary.')
+        }
+        setRushSummary(data as RushSummary)
+      } catch (err) {
+        setRushError(err instanceof Error ? err.message : 'Could not load rush summary.')
+      } finally {
+        setRushLoading(false)
+      }
+    }
+
+    fetchRushSummary()
+  }, [messId, selectedMeal, rushRefresh])
+
+  useEffect(() => {
+    setSelectedRushLevel(null)
+    setRushMessage('')
+  }, [selectedMeal])
+
+  async function handleRushSubmit() {
+    if (!messId || !selectedRushLevel) return
+    if (!accessToken) {
+      setRushMessage('Please log in before submitting a rush report.')
+      return
+    }
+    if (!isMealActive(selectedMeal)) {
+      setRushMessage('Rush reports are only accepted during serving hours.')
+      return
+    }
+
+    setRushSubmitting(true)
+    setRushMessage('')
+    try {
+      const response = await fetch(`${API_URL}/rush/reports`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          mess_id: messId,
+          meal_type: selectedMeal,
+          level: selectedRushLevel,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        if (response.status === 401) {
+          localStorage.removeItem('access_token')
+          setAccessToken(null)
+        }
+        throw new Error(data?.detail ?? `Rush report failed: ${response.status}`)
+      }
+
+      setRushMessage('Rush report submitted.')
+      setSelectedRushLevel(null)
+      setRushRefresh((value) => value + 1)
+    } catch (err) {
+      setRushMessage(err instanceof Error ? err.message : 'Could not submit rush report.')
+    } finally {
+      setRushSubmitting(false)
+    }
+  }
 
   useEffect(() => {
     async function fetchMenu() {
@@ -447,6 +604,88 @@ function App() {
             ))}
           </div>
         </div>
+
+        <section className="rush-panel" aria-labelledby="rush-heading">
+          <div className="rush-panel-heading">
+            <div>
+              <p className="eyebrow">LIVE MESS UPDATE</p>
+              <h3 id="rush-heading">Mess Rush</h3>
+              <p className="meal-serving-time">
+                {selectedMeal === 'breakfast' && '7:30 AM – 10:00 AM'}
+                {selectedMeal === 'lunch' && '12:30 PM – 2:30 PM'}
+                {selectedMeal === 'dinner' && '8:00 PM – 10:00 PM'}
+              </p>
+            </div>
+            <span className="rush-slot">
+              {isMealActive(selectedMeal)
+                ? 'Current 15-minute slot'
+                : 'Outside serving hours'}
+            </span>
+          </div>
+
+          {!isMealActive(selectedMeal) ? (
+            <p className="rush-hint">
+              Rush reports and summaries are available during this meal's serving hours.
+            </p>
+          ) : (
+            <>
+              {rushLoading && <p className="rush-hint">Loading rush data...</p>}
+              {rushError && <p className="rush-error" role="alert">{rushError}</p>}
+              {!rushLoading && !rushError && rushSummary && (
+                <div className="rush-indicators">
+                  <div className="rush-indicator">
+                    <span className="rush-label">Current rush</span>
+                    <strong className={`rush-value rush-${rushSummary.current_rush}`}>
+                      {rushLabel(rushSummary.current_rush)}
+                    </strong>
+                    <span className="rush-detail">
+                      {rushSummary.current_reports} {rushSummary.current_reports === 1 ? 'report' : 'reports'} this slot
+                    </span>
+                  </div>
+                  <div className="rush-indicator">
+                    <span className="rush-label">Predicted rush</span>
+                    <strong className={`rush-value rush-${rushSummary.predicted_rush}`}>
+                      {rushLabel(rushSummary.predicted_rush)}
+                    </strong>
+                    <span className="rush-detail">
+                      {rushSummary.historical_reports} historical {rushSummary.historical_reports === 1 ? 'report' : 'reports'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="rush-report-form">
+                <p className="rush-prompt">How busy is the mess right now?</p>
+                <div className="rush-level-buttons">
+                  {(['low', 'moderate', 'high'] as RushLevel[]).map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      className={`rush-level-button rush-choice-${level}${selectedRushLevel === level ? ' selected' : ''}`}
+                      aria-pressed={selectedRushLevel === level}
+                      onClick={() => setSelectedRushLevel(level)}
+                      disabled={!accessToken || rushSubmitting}
+                    >
+                      {rushLabel(level)}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="rush-submit"
+                    onClick={handleRushSubmit}
+                    disabled={!accessToken || !selectedRushLevel || rushSubmitting || !messId}
+                  >
+                    {rushSubmitting ? 'Submitting...' : 'Report rush'}
+                  </button>
+                </div>
+                {!accessToken && (
+                  <p className="rush-hint">Log in to submit a rush report.</p>
+                )}
+                {rushMessage && <p className="rush-message" role="status">{rushMessage}</p>}
+              </div>
+            </>
+          )}
+        </section>
 
         {loading && <p>Loading menu...</p>}
         {error && <p role="alert">Could not load menu: {error}</p>}

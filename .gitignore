@@ -1,6 +1,7 @@
 # Secrets
 .env
 **/.env
+*.dump
 
 # Python environments
 .venv/

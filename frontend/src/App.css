@@ -273,6 +273,10 @@ button {
   color: #20231f;
 }
 
+.auth-card h2 {
+  color: #20231f;
+}
+
 .auth-heading {
   margin-bottom: 22px;
 }
@@ -406,4 +410,152 @@ button {
 .logout-button:focus-visible {
   outline: 2px solid #52764b;
   outline-offset: 3px;
+}
+
+/* Rush indicator */
+.rush-panel {
+  margin: 22px 0 28px;
+  padding: 22px;
+  border: 1px solid #e2e7dc;
+  border-radius: 15px;
+  background: #f9faf6;
+}
+
+.rush-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.rush-panel-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.rush-panel-heading h3 {
+  margin: 0;
+  color: #20231f;
+  font-size: 1.25rem;
+}
+
+.rush-slot,
+.rush-hint,
+.rush-detail {
+  color: #777d72;
+  font-size: 0.82rem;
+}
+
+.rush-slot {
+  text-align: right;
+}
+
+.rush-indicators {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rush-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px;
+  border: 1px solid #e5e8df;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.rush-label {
+  color: #777d72;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.rush-value {
+  color: #315c3b;
+  font-size: 1.1rem;
+  line-height: 1.35;
+}
+
+.rush-low { color: #367348; }
+.rush-moderate { color: #a16a12; }
+.rush-high { color: #b34335; }
+.rush-mixed { color: #5f6470; }
+.rush-no_data_yet,
+.rush-not_enough_historical_data { color: #777d72; font-size: 0.95rem; }
+
+.rush-report-form {
+  margin-top: 18px;
+  padding-top: 17px;
+  border-top: 1px solid #e5e8df;
+}
+
+.rush-prompt {
+  margin: 0 0 12px;
+  color: #30372e;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.rush-level-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rush-level-button,
+.rush-submit {
+  padding: 9px 14px;
+  border: 1px solid #d9ded4;
+  border-radius: 9px;
+  background: #fff;
+  color: #42483f;
+  font-size: 0.85rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.rush-choice-low.selected { background: #e7f3e8; border-color: #367348; color: #28623a; }
+.rush-choice-moderate.selected { background: #fff2d9; border-color: #a16a12; color: #87570c; }
+.rush-choice-high.selected { background: #fbe8e5; border-color: #b34335; color: #9d3025; }
+
+.rush-level-button:disabled,
+.rush-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rush-submit {
+  border-color: #315c3b;
+  background: #315c3b;
+  color: white;
+}
+
+.rush-submit:hover:not(:disabled) {
+  background: #25482e;
+}
+
+.rush-message,
+.rush-error {
+  margin: 12px 0 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.rush-message { color: #315c3b; }
+.rush-error { color: #b34335; }
+
+@media (max-width: 520px) {
+  .rush-panel { padding: 16px; }
+  .rush-indicators { grid-template-columns: 1fr; }
+  .rush-panel-heading { align-items: flex-start; }
+  .rush-slot { max-width: 125px; }
+}
+
+.meal-serving-time {
+  margin: 6px 0 12px;
+  color: #687568;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
