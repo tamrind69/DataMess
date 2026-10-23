@@ -12,6 +12,7 @@ from app.models.menu_item import MenuItem
 from app.models.dish import Dish
 from app.models.user import User
 from app.models.rating import Rating
+from app.models.rush_report import RushReport
 from app.schemas.mess import MessResponse
 from app.schemas.menu import MenuResponse
 from app.schemas.user import UserCreate
@@ -19,13 +20,18 @@ from app.schemas.user_response import UserResponse
 from app.schemas.login import LoginRequest
 from app.schemas.token import TokenResponse
 from app.schemas.rating import RatingCreate , RatingResponse , RatingUpdate , DishRatingSummary
+from app.schemas.rush_report import (
+    RushReportCreate,
+    RushReportResponse,
+    RushSummaryResponse,
+)
 
 from app.services.menu import get_menu_by_weekday
 
 from app.core.security import create_access_token
 from app.core.security import get_current_user
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -279,4 +285,180 @@ def get_dish_rating_summary(
             else None
         ),
         "total_ratings": total_ratings,
+    }
+
+# Serving windows are local server time. Each window is divided into
+# 15-minute slots anchored at its start time.
+RUSH_MEAL_WINDOWS = {
+    "breakfast": (7, 30, 10, 0),
+    "lunch": (12, 30, 14, 30),
+    "dinner": (20, 0, 22, 0),
+}
+
+
+@app.post(
+    "/rush/reports",
+    response_model=RushReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_rush_report(
+    payload: RushReportCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Use server time so clients cannot choose or backdate their slot.
+    now = datetime.now()
+    start_hour, start_minute, end_hour, end_minute = RUSH_MEAL_WINDOWS[
+        payload.meal_type
+    ]
+    meal_start = now.replace(
+        hour=start_hour, minute=start_minute, second=0, microsecond=0
+    )
+    meal_end = now.replace(
+        hour=end_hour, minute=end_minute, second=0, microsecond=0
+    )
+
+    if not (meal_start <= now < meal_end):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Rush reports for {payload.meal_type} are only accepted "
+                   f"between {start_hour:02d}:{start_minute:02d} and "
+                   f"{end_hour:02d}:{end_minute:02d}.",
+        )
+
+    mess = db.get(Mess, payload.mess_id)
+    if mess is None or not mess.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active mess not found",
+        )
+
+    elapsed_minutes = int((now - meal_start).total_seconds() // 60)
+    slot_start = meal_start + timedelta(minutes=(elapsed_minutes // 15) * 15)
+
+    report = RushReport(
+        user_id=current_user.id,
+        mess_id=mess.id,
+        meal_type=payload.meal_type,
+        level=payload.level,
+        slot_start=slot_start,
+    )
+    db.add(report)
+
+    try:
+        db.commit()
+        db.refresh(report)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You have already submitted a rush report for this mess, meal, and 15-minute slot.",
+        )
+
+    return report
+
+
+@app.get(
+    "/rush/summary/{mess_id}/{meal_type}",
+    response_model=RushSummaryResponse,
+)
+def get_rush_summary(
+    mess_id: int,
+    meal_type: str,
+    db: Session = Depends(get_db),
+):
+    if meal_type not in RUSH_MEAL_WINDOWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="meal_type must be breakfast, lunch, or dinner.",
+        )
+
+    mess = db.get(Mess, mess_id)
+    if mess is None or not mess.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active mess not found",
+        )
+
+    # Keep slot calculation identical to report submission.
+    now = datetime.now()
+    start_hour, start_minute, end_hour, end_minute = RUSH_MEAL_WINDOWS[meal_type]
+    meal_start = now.replace(
+        hour=start_hour, minute=start_minute, second=0, microsecond=0
+    )
+    meal_end = now.replace(
+        hour=end_hour, minute=end_minute, second=0, microsecond=0
+    )
+
+    if not (meal_start <= now < meal_end):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Rush summaries for {meal_type} are only available during "
+                   f"serving hours ({start_hour:02d}:{start_minute:02d}-"
+                   f"{end_hour:02d}:{end_minute:02d}).",
+        )
+
+    elapsed_minutes = int((now - meal_start).total_seconds() // 60)
+    slot_start = meal_start + timedelta(minutes=(elapsed_minutes // 15) * 15)
+    slot_end = slot_start + timedelta(minutes=15)
+
+    current_reports = db.scalars(
+        select(RushReport).where(
+            RushReport.mess_id == mess_id,
+            RushReport.meal_type == meal_type,
+            RushReport.slot_start == slot_start,
+        )
+    ).all()
+
+    current_counts = {}
+    for report in current_reports:
+        current_counts[report.level] = current_counts.get(report.level, 0) + 1
+
+    if not current_reports:
+        current_rush = "no_data_yet"
+    else:
+        highest_current_count = max(current_counts.values())
+        current_winners = [
+            level for level, count in current_counts.items()
+            if count == highest_current_count
+        ]
+        current_rush = current_winners[0] if len(current_winners) == 1 else "mixed"
+
+    # Match the same clock-time slot, but only reports from earlier calendar days.
+    historical_reports = db.scalars(
+        select(RushReport).where(
+            RushReport.mess_id == mess_id,
+            RushReport.meal_type == meal_type,
+            func.date(RushReport.slot_start) < now.date(),
+            func.extract("hour", RushReport.slot_start) == slot_start.hour,
+            func.extract("minute", RushReport.slot_start) == slot_start.minute,
+        )
+    ).all()
+
+    historical_count = len(historical_reports)
+    if historical_count < 5:
+        predicted_rush = "not_enough_historical_data"
+    else:
+        historical_counts = {}
+        for report in historical_reports:
+            historical_counts[report.level] = historical_counts.get(report.level, 0) + 1
+        highest_historical_count = max(historical_counts.values())
+        historical_winners = [
+            level for level, count in historical_counts.items()
+            if count == highest_historical_count
+        ]
+        predicted_rush = (
+            historical_winners[0]
+            if len(historical_winners) == 1
+            else "mixed"
+        )
+
+    return {
+        "mess_id": mess_id,
+        "meal_type": meal_type,
+        "slot_start": slot_start,
+        "current_rush": current_rush,
+        "current_reports": len(current_reports),
+        "predicted_rush": predicted_rush,
+        "historical_reports": historical_count,
     }
