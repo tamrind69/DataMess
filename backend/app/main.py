@@ -32,6 +32,7 @@ from app.core.security import create_access_token
 from app.core.security import get_current_user
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -309,7 +310,7 @@ def create_rush_report(
     db: Session = Depends(get_db),
 ):
     # Use server time so clients cannot choose or backdate their slot.
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     start_hour, start_minute, end_hour, end_minute = RUSH_MEAL_WINDOWS[
         payload.meal_type
     ]
@@ -383,7 +384,7 @@ def get_rush_summary(
         )
 
     # Keep slot calculation identical to report submission.
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     start_hour, start_minute, end_hour, end_minute = RUSH_MEAL_WINDOWS[meal_type]
     meal_start = now.replace(
         hour=start_hour, minute=start_minute, second=0, microsecond=0
