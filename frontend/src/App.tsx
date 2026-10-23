@@ -54,7 +54,7 @@ type RushSummary = {
 type RushLevel = 'low' | 'moderate' | 'high'
 
 const meals: Meal[] = ['breakfast', 'lunch', 'dinner']
-const API_URL = 'http://127.0.0.1:8000'
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 const mealWindows: Record<Meal, { start: number; end: number }> = {
   breakfast: { start: 7 * 60 + 30, end: 10 * 60 },
