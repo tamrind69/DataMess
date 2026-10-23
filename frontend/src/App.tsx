@@ -3,6 +3,13 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 
+type UserRating = {
+  id: number
+  dish_id: number
+  score: number
+  created_at: string
+}
+
 type Dish = {
   id: number
   name: string
@@ -36,6 +43,8 @@ function App() {
     Record<number, number>
   >({})
 
+  const [myRatings, setMyRatings] = useState<Record<number, number>>({})
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [accessToken, setAccessToken] = useState<string | null>(
@@ -46,6 +55,31 @@ function App() {
 
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [name, setName] = useState('')
+
+  useEffect(() => {
+    async function validateSession() {
+      if (!accessToken) return
+
+      try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        })
+
+        if (response.status === 401) {
+          localStorage.removeItem('access_token')
+          setAccessToken(null)
+          setMyRatings({})
+          setSelectedRatings({})
+        }
+      } catch (err) {
+        console.error('Failed to validate session:', err)
+      }
+    }
+
+    validateSession()
+  }, [accessToken])
 
   useEffect(() => {
     async function fetchMenu() {
@@ -74,6 +108,45 @@ function App() {
 
     fetchMenu()
   }, [selectedMeal])
+
+  useEffect(() => {
+    async function fetchMyRatings() {
+      if (!accessToken) {
+        setMyRatings({})
+        return
+      }
+
+      try {
+        const response = await fetch(`${API_URL}/ratings/me`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error('Could not load your ratings.')
+        }
+
+        const ratings: UserRating[] = await response.json()
+        const ratingsMap: Record<number, number> = {}
+
+        for (const rating of ratings) {
+          ratingsMap[rating.dish_id] = rating.score
+        }
+
+        setMyRatings(ratingsMap)
+
+        setSelectedRatings((previous) => ({
+          ...previous,
+          ...ratingsMap,
+        }))
+      } catch (err) {
+        console.error('Failed to fetch your ratings:', err)
+      }
+    }
+
+    fetchMyRatings()
+  }, [accessToken])
 
   async function handleRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -149,6 +222,8 @@ function App() {
     localStorage.removeItem('access_token')
     setAccessToken(null)
     setAuthMessage('')
+    setMyRatings({})
+    setSelectedRatings({})
   }
 
   async function handleRatingSubmit(dishId: number) {
@@ -164,18 +239,27 @@ function App() {
     setAuthMessage('')
 
     try {
-      const response = await fetch(`${API_URL}/ratings`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          dish_id: dishId,
-          score,
-        }),
-      })
+      const isUpdating = myRatings[dishId] !== undefined
 
+      const response = await fetch(
+        isUpdating
+          ? `${API_URL}/ratings/${dishId}`
+          : `${API_URL}/ratings`,
+        {
+          method: isUpdating ? 'PUT' : 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify(
+            isUpdating
+              ? { score }
+              : { dish_id: dishId, score },
+          ),
+        },
+      )
+
+      // Handle errors before updating local rating state.
       if (!response.ok) {
         if (response.status === 401) {
           localStorage.removeItem('access_token')
@@ -184,14 +268,21 @@ function App() {
         }
 
         const detail = await response.json().catch(() => null)
+
         throw new Error(
           detail?.detail ?? `Rating submission failed: ${response.status}`,
         )
       }
 
+      // Only update local state after the server confirms success.
+      setMyRatings((previous) => ({
+        ...previous,
+        [dishId]: score,
+      }))
+
       setAuthMessage('Rating submitted successfully.')
 
-      // Refresh the menu so updated averages and counts can appear.
+      // Refresh the menu so updated averages and counts appear.
       const menuResponse = await fetch(
         `${API_URL}/menus/today/${selectedMeal}`,
       )
@@ -234,7 +325,9 @@ function App() {
             <div className="auth-heading">
               <p className="eyebrow">YOUR DATAMESS ACCOUNT</p>
               <h2>
-                {authMode === 'login' ? 'Welcome back' : 'Create your account'}
+                {authMode === 'login'
+                  ? 'Welcome back'
+                  : 'Create your account'}
               </h2>
               <p>
                 {authMode === 'login'
@@ -246,7 +339,9 @@ function App() {
             <div className="auth-tabs">
               <button
                 type="button"
-                className={authMode === 'login' ? 'auth-tab active' : 'auth-tab'}
+                className={
+                  authMode === 'login' ? 'auth-tab active' : 'auth-tab'
+                }
                 onClick={() => {
                   setAuthMode('login')
                   setAuthMessage('')
@@ -254,9 +349,12 @@ function App() {
               >
                 Login
               </button>
+
               <button
                 type="button"
-                className={authMode === 'register' ? 'auth-tab active' : 'auth-tab'}
+                className={
+                  authMode === 'register' ? 'auth-tab active' : 'auth-tab'
+                }
                 onClick={() => {
                   setAuthMode('register')
                   setAuthMessage('')
@@ -407,9 +505,7 @@ function App() {
                   <button
                     type="button"
                     className="submit-rating"
-                    disabled={
-                      !selectedRatings[dish.id] || !accessToken
-                    }
+                    disabled={!selectedRatings[dish.id] || !accessToken}
                     onClick={() => handleRatingSubmit(dish.id)}
                   >
                     Submit
