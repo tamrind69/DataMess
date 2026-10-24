@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
@@ -6,6 +5,7 @@ import './App.css'
 type UserRating = {
   id: number
   dish_id: number
+  mess_id: number
   score: number
   created_at: string
 }
@@ -18,6 +18,7 @@ type Dish = {
 }
 
 type MenuResponse = {
+  mess_id?: number
   weekday: number
   meal_type: string
   dishes: Dish[]
@@ -85,6 +86,7 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedMeal, setSelectedMeal] = useState<Meal>('breakfast')
+  const [messes, setMesses] = useState<Mess[]>([])
   const [messId, setMessId] = useState<number | null>(null)
   const [rushSummary, setRushSummary] = useState<RushSummary | null>(null)
   const [rushLoading, setRushLoading] = useState(false)
@@ -141,11 +143,14 @@ function App() {
       try {
         const response = await fetch(`${API_URL}/messes`)
         if (!response.ok) throw new Error('Could not load messes.')
-        const messes: Mess[] = await response.json()
-        const activeMess = messes.find((mess) => mess.is_active)
-        setMessId(activeMess?.id ?? null)
+        const data: Mess[] = await response.json()
+        const activeMesses = data.filter((mess) => mess.is_active)
+        setMesses(activeMesses)
+        if (activeMesses.length > 0) {
+          setMessId((current) => current ?? activeMesses[0].id)
+        }
       } catch (err) {
-        console.error('Failed to load messes for rush reports:', err)
+        console.error('Failed to load messes:', err)
       }
     }
 
@@ -188,10 +193,19 @@ function App() {
     fetchRushSummary()
   }, [messId, selectedMeal, rushRefresh])
 
-  useEffect(() => {
+  function handleMealChange(meal: Meal) {
+    setSelectedMeal(meal)
     setSelectedRushLevel(null)
     setRushMessage('')
-  }, [selectedMeal])
+  }
+
+  function handleMessChange(newMessId: number) {
+    if (messId !== newMessId) {
+      setMessId(newMessId)
+      setMyRatings({})
+      setSelectedRatings({})
+    }
+  }
 
   async function handleRushSubmit() {
     if (!messId || !selectedRushLevel) return
@@ -240,12 +254,14 @@ function App() {
 
   useEffect(() => {
     async function fetchMenu() {
+      if (messId === null) return
+
       try {
         setLoading(true)
         setError(null)
 
         const response = await fetch(
-          `${API_URL}/menus/today/${selectedMeal}`,
+          `${API_URL}/menus/today/${selectedMeal}?mess_id=${messId}`,
         )
 
         if (!response.ok) {
@@ -264,17 +280,18 @@ function App() {
     }
 
     fetchMenu()
-  }, [selectedMeal])
+  }, [selectedMeal, messId])
 
   useEffect(() => {
     async function fetchMyRatings() {
-      if (!accessToken) {
+      if (!accessToken || messId === null) {
         setMyRatings({})
+        setSelectedRatings({})
         return
       }
 
       try {
-        const response = await fetch(`${API_URL}/ratings/me`, {
+        const response = await fetch(`${API_URL}/ratings/me?mess_id=${messId}`, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -293,17 +310,14 @@ function App() {
 
         setMyRatings(ratingsMap)
 
-        setSelectedRatings((previous) => ({
-          ...previous,
-          ...ratingsMap,
-        }))
+        setSelectedRatings(ratingsMap)
       } catch (err) {
         console.error('Failed to fetch your ratings:', err)
       }
     }
 
     fetchMyRatings()
-  }, [accessToken])
+  }, [accessToken, messId])
 
   async function handleRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -386,7 +400,7 @@ function App() {
   async function handleRatingSubmit(dishId: number) {
     const score = selectedRatings[dishId]
 
-    if (!score) return
+    if (!score || messId === null) return
 
     if (!accessToken) {
       setAuthMessage('Please log in before submitting a rating.')
@@ -410,8 +424,8 @@ function App() {
           },
           body: JSON.stringify(
             isUpdating
-              ? { score }
-              : { dish_id: dishId, score },
+              ? { score, mess_id: messId }
+              : { dish_id: dishId, score, mess_id: messId },
           ),
         },
       )
@@ -441,7 +455,7 @@ function App() {
 
       // Refresh the menu so updated averages and counts appear.
       const menuResponse = await fetch(
-        `${API_URL}/menus/today/${selectedMeal}`,
+        `${API_URL}/menus/today/${selectedMeal}?mess_id=${messId}`,
       )
 
       if (menuResponse.ok) {
@@ -454,6 +468,8 @@ function App() {
       )
     }
   }
+
+  const currentMessName = messes.find((m) => m.id === messId)?.name.toUpperCase() ?? 'CAMPUS MESS'
 
   return (
     <main className="app">
@@ -585,7 +601,7 @@ function App() {
       <section className="menu-section">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">NIT PATNA · BOYS' MESS</p>
+            <p className="eyebrow">NIT PATNA · {currentMessName}</p>
             <h2>Today's Menu</h2>
           </div>
 
@@ -597,13 +613,30 @@ function App() {
                 className={
                   selectedMeal === meal ? 'meal-tab active' : 'meal-tab'
                 }
-                onClick={() => setSelectedMeal(meal)}
+                onClick={() => handleMealChange(meal)}
               >
                 {meal[0].toUpperCase() + meal.slice(1)}
               </button>
             ))}
           </div>
         </div>
+
+        {messes.length > 0 && (
+          <div className="mess-tabs" role="tablist" aria-label="Select mess">
+            {messes.map((mess) => (
+              <button
+                key={mess.id}
+                type="button"
+                role="tab"
+                aria-selected={messId === mess.id}
+                className={messId === mess.id ? 'mess-tab active' : 'mess-tab'}
+                onClick={() => handleMessChange(mess.id)}
+              >
+                {mess.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         <section className="rush-panel" aria-labelledby="rush-heading">
           <div className="rush-panel-heading">

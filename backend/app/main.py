@@ -46,8 +46,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://data-mess.vercel.app",
-    ],
+    "https://data-mess.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,23 +72,25 @@ def get_messes(db: Session = Depends(get_db)):
     return db.scalars(statement).all()
 
 
-@app.get("/menus/today/{meal_type}" , response_model= MenuResponse)
+@app.get("/menus/today/{meal_type}", response_model=MenuResponse)
 def get_today_menu(
     meal_type: str,
-    db: Session = Depends(get_db)
+    mess_id: int | None = None,
+    db: Session = Depends(get_db),
 ):
     dt = datetime.now()
 
-    return get_menu_by_weekday(dt.weekday() , meal_type , db)
+    return get_menu_by_weekday(dt.weekday(), meal_type, db, mess_id=mess_id)
 
 
 @app.get("/menus/{weekday}/{meal_type}", response_model=MenuResponse)
 def get_menu(
     weekday: int,
     meal_type: str,
+    mess_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    return get_menu_by_weekday(weekday, meal_type, db)
+    return get_menu_by_weekday(weekday, meal_type, db, mess_id=mess_id)
 
 
 
@@ -175,17 +179,38 @@ def create_rating(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    dish = db.get(Dish, payload.dish_id)
+    mess = db.get(Mess, payload.mess_id)
+    if mess is None or not mess.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active mess not found",
+        )
 
+    dish = db.get(Dish, payload.dish_id)
     if dish is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dish not found",
         )
 
+    dish_in_mess = db.scalar(
+        select(MenuItem.id)
+        .join(Menu, Menu.id == MenuItem.menu_id)
+        .where(
+            Menu.mess_id == mess.id,
+            MenuItem.dish_id == dish.id,
+        )
+    )
+    if not dish_in_mess:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dish does not belong to the selected mess menu",
+        )
+
     rating = Rating(
         user_id=current_user.id,
         dish_id=dish.id,
+        mess_id=mess.id,
         score=payload.score,
     )
 
@@ -198,7 +223,7 @@ def create_rating(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="You have already rated this dish",
+            detail="You have already rated this dish for this mess",
         )
 
     return rating
@@ -206,12 +231,23 @@ def create_rating(
 
 @app.get("/ratings/me", response_model=list[RatingResponse])
 def get_my_ratings(
+    mess_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     statement = select(Rating).where(
         Rating.user_id == current_user.id
     )
+
+    if mess_id is not None:
+        mess = db.get(Mess, mess_id)
+        if mess is None or not mess.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Active mess not found",
+            )
+        statement = statement.where(Rating.mess_id == mess.id)
+
     return db.scalars(statement).all()
 
 
@@ -222,20 +258,49 @@ def get_my_ratings(
 def update_rating(
     dish_id: int,
     payload: RatingUpdate,
+    mess_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    dish = db.get(Dish, dish_id)
+    target_mess_id = payload.mess_id or mess_id
+    if not target_mess_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mess_id is required",
+        )
 
+    mess = db.get(Mess, target_mess_id)
+    if mess is None or not mess.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active mess not found",
+        )
+
+    dish = db.get(Dish, dish_id)
     if dish is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dish not found",
         )
 
+    dish_in_mess = db.scalar(
+        select(MenuItem.id)
+        .join(Menu, Menu.id == MenuItem.menu_id)
+        .where(
+            Menu.mess_id == mess.id,
+            MenuItem.dish_id == dish.id,
+        )
+    )
+    if not dish_in_mess:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dish does not belong to the selected mess menu",
+        )
+
     statement = select(Rating).where(
         Rating.user_id == current_user.id,
         Rating.dish_id == dish_id,
+        Rating.mess_id == mess.id,
     )
     rating = db.scalar(statement)
 
@@ -243,6 +308,7 @@ def update_rating(
         rating = Rating(
             user_id=current_user.id,
             dish_id=dish_id,
+            mess_id=mess.id,
             score=payload.score,
         )
         db.add(rating)
@@ -261,6 +327,7 @@ def update_rating(
 )
 def get_dish_rating_summary(
     dish_id: int,
+    mess_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     dish = db.get(Dish, dish_id)
@@ -278,10 +345,34 @@ def get_dish_rating_summary(
         Rating.dish_id == dish_id
     )
 
+    if mess_id is not None:
+        mess = db.get(Mess, mess_id)
+        if mess is None or not mess.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Active mess not found",
+            )
+
+        dish_in_mess = db.scalar(
+            select(MenuItem.id)
+            .join(Menu, Menu.id == MenuItem.menu_id)
+            .where(
+                Menu.mess_id == mess.id,
+                MenuItem.dish_id == dish.id,
+            )
+        )
+        if not dish_in_mess:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Dish does not belong to the selected mess menu",
+            )
+        statement = statement.where(Rating.mess_id == mess.id)
+
     average_score, total_ratings = db.execute(statement).one()
 
     return {
         "dish_id": dish_id,
+        "mess_id": mess_id,
         "average_score": (
             float(average_score)
             if average_score is not None

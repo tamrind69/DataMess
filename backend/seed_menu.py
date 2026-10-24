@@ -1,5 +1,6 @@
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.mess import Mess
@@ -248,78 +249,89 @@ def get_or_create_menu(
     return menu
 
 
-def main() -> None:
-    with SessionLocal() as db:
-        try:
-            mess = db.scalar(
-                select(Mess).where(Mess.name == "Boys' Mess")
-            )
+def seed_menus(db: Session) -> dict[str, int]:
+    target_mess_names = ["Boys' Mess", "Girls' Mess"]
+    messes = db.scalars(
+        select(Mess).where(Mess.name.in_(target_mess_names))
+    ).all()
 
-            if mess is None:
-                raise ValueError(
-                    "Boys' Mess does not exist. Run seed_mess.py first."
+    found_names = {m.name for m in messes}
+    missing = [name for name in target_mess_names if name not in found_names]
+    if missing:
+        raise ValueError(
+            f"Messes not found: {missing}. Run seed_mess.py first."
+        )
+
+    new_dishes = 0
+    new_menus = 0
+    new_menu_items = 0
+
+    for mess in messes:
+        for weekday, meals in MENU_DATA.items():
+            for meal_type, dish_names in meals.items():
+                menu = db.scalar(
+                    select(Menu).where(
+                        Menu.mess_id == mess.id,
+                        Menu.weekday == weekday,
+                        Menu.meal_type == meal_type,
+                    )
                 )
 
-            new_dishes = 0
-            new_menus = 0
-            new_menu_items = 0
+                if menu is None:
+                    menu = Menu(
+                        mess_id=mess.id,
+                        weekday=weekday,
+                        meal_type=meal_type,
+                    )
+                    db.add(menu)
+                    db.flush()
+                    new_menus += 1
 
-            for weekday, meals in MENU_DATA.items():
-                for meal_type, dish_names in meals.items():
-                    menu = db.scalar(
-                        select(Menu).where(
-                            Menu.mess_id == mess.id,
-                            Menu.weekday == weekday,
-                            Menu.meal_type == meal_type,
+                for dish_name in dish_names:
+                    dish = db.scalar(
+                        select(Dish).where(
+                            Dish.name == dish_name
                         )
                     )
 
-                    if menu is None:
-                        menu = Menu(
-                            mess_id=mess.id,
-                            weekday=weekday,
-                            meal_type=meal_type,
-                        )
-                        db.add(menu)
+                    if dish is None:
+                        dish = Dish(name=dish_name)
+                        db.add(dish)
                         db.flush()
-                        new_menus += 1
+                        new_dishes += 1
 
-                    for dish_name in dish_names:
-                        dish = db.scalar(
-                            select(Dish).where(
-                                Dish.name == dish_name
+                    existing_item = db.scalar(
+                        select(MenuItem.id).where(
+                            MenuItem.menu_id == menu.id,
+                            MenuItem.dish_id == dish.id,
+                        )
+                    )
+
+                    if existing_item is None:
+                        db.add(
+                            MenuItem(
+                                menu_id=menu.id,
+                                dish_id=dish.id,
                             )
                         )
+                        new_menu_items += 1
 
-                        if dish is None:
-                            dish = Dish(name=dish_name)
-                            db.add(dish)
-                            db.flush()
-                            new_dishes += 1
+    db.commit()
+    return {
+        "new_dishes": new_dishes,
+        "new_menus": new_menus,
+        "new_menu_items": new_menu_items,
+    }
 
-                        existing_item = db.scalar(
-                            select(MenuItem.id).where(
-                                MenuItem.menu_id == menu.id,
-                                MenuItem.dish_id == dish.id,
-                            )
-                        )
 
-                        if existing_item is None:
-                            db.add(
-                                MenuItem(
-                                    menu_id=menu.id,
-                                    dish_id=dish.id,
-                                )
-                            )
-                            new_menu_items += 1
-
-            db.commit()
-
+def main() -> None:
+    with SessionLocal() as db:
+        try:
+            stats = seed_menus(db)
             print("Menu seeding completed successfully.")
-            print(f"New dishes: {new_dishes}")
-            print(f"New menus: {new_menus}")
-            print(f"New menu items: {new_menu_items}")
-
+            print(f"New dishes: {stats['new_dishes']}")
+            print(f"New menus: {stats['new_menus']}")
+            print(f"New menu items: {stats['new_menu_items']}")
         except Exception:
             db.rollback()
             raise

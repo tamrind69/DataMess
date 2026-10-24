@@ -1,4 +1,3 @@
-
 from fastapi import HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ def get_menu_by_weekday(
     weekday: int,
     meal_type: str,
     db: Session,
+    mess_id: int | None = None,
 ):
     if weekday < 0 or weekday > 6:
         raise HTTPException(
@@ -27,14 +27,17 @@ def get_menu_by_weekday(
             detail="meal_type must be breakfast, lunch, or dinner",
         )
 
-    mess = db.scalar(
-        select(Mess).where(Mess.name == "Boys' Mess")
-    )
+    if mess_id is not None:
+        mess = db.get(Mess, mess_id)
+    else:
+        mess = db.scalar(
+            select(Mess).where(Mess.is_active == True).order_by(Mess.id)
+        )
 
-    if mess is None:
+    if mess is None or not mess.is_active:
         raise HTTPException(
             status_code=404,
-            detail="Boys' Mess not found",
+            detail="Active mess not found",
         )
 
     menu = db.scalar(
@@ -59,7 +62,10 @@ def get_menu_by_weekday(
             func.count(Rating.id).label("rating_count"),
         )
         .join(MenuItem, MenuItem.dish_id == Dish.id)
-        .outerjoin(Rating, Rating.dish_id == Dish.id)
+        .outerjoin(
+            Rating,
+            (Rating.dish_id == Dish.id) & (Rating.mess_id == mess.id),
+        )
         .where(MenuItem.menu_id == menu.id)
         .group_by(Dish.id, Dish.name, MenuItem.id)
         .order_by(MenuItem.id)
@@ -82,6 +88,7 @@ def get_menu_by_weekday(
     ]
 
     return {
+        "mess_id": mess.id,
         "weekday": menu.weekday,
         "meal_type": menu.meal_type,
         "dishes": dishes,
