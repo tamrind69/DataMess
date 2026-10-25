@@ -10,6 +10,7 @@ class DishInMenu(BaseModel):
 
 
 class MenuResponse(BaseModel):
+    mess_id: int | None = None
     weekday: int
     meal_type: str
     dishes: list[DishInMenu]
